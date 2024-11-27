@@ -1,349 +1,189 @@
-/*----------------------------------------------------------------------------*/
-/*                                                                            */
-/*    Module:       main.cpp                                                  */
-/*    Author:       VEX                                                       */
-/*    Created:      Thu Sep 26 2019                                           */
-/*    Description:  Competition Template                                      */
-/*                                                                            */
-/*----------------------------------------------------------------------------*/
+#include "main.h"
+#include "lemlib/api.hpp" // IWYU pragma: keep
 
-// ---- START VEXCODE CONFIGURED DEVICES ----
-// ---- END VEXCODE CONFIGURED DEVICES ----
 
-#include "vex.h"
+//controller 
+pros::Controller controller(pros::E_CONTROLLER_MASTER);
 
-using namespace vex;
+//motor groups
+pros::MotorGroup LeftMotor({-18,19,20}, pros::MotorGearset::blue);
+pros::MotorGroup RightMotor({10,9,-8}, pros::MotorGearset::blue);
+//pros::MotorGroup LadyBrown({-19,18}, pros::MotorGearset::green);
 
-// A global instance of competition
-competition Competition;
-controller Cntrl;
 
-motor LF(PORT6);
-motor LM(PORT8, true);
-motor LB(PORT10, true);
-motor RF(PORT1, true);
-motor RM(PORT4);
-motor RB(PORT5);
-motor intake(PORT20, true);
-triport triwire(PORT22);
-pneumatics clamp(triwire.A);
+pros::MotorGroup Intake({12, -2});
+pros::Motor Intake1(-2);
+pros::Motor Intake2(12);
+pros::Motor Hook(11,pros::MotorGearset::blue);
 
-motor_group Left(LF, LM, LB);
-motor_group Right(RF,RM,RB);
+//pneumatic
+pros::adi::Pneumatics Clamp(1, false);
+//pros::ADIAnalogIn Doinker(2);
 
-inertial Inertial(PORT12);
-// define your global instances of motors and other devices here
+//sensors
+pros::Imu inertial(7);
+//pros::Rotation x(9);
+//pros::Rotation y(10);
 
-/*---------------------------------------------------------------------------*/
-/*                          Pre-Autonomous Functions                         */
-/*                                                                           */
-/*  You may want to perform some actions before the competition starts.      */
-/*  Do them in the following function.  You must return from this function   */
-/*  or the autonomous and usercontrol tasks will not be started.  This       */
-/*  function is only called once after the V5 has been powered on and        */
-/*  not every time that the robot is disabled.                               */
-/*---------------------------------------------------------------------------*/
+//tracking wheels
+//lemlib::TrackingWheel horizontal(&x, lemlib::Omniwheel::NEW_2, 0);
+//lemlib::TrackingWheel vertical(&y,lemlib::Omniwheel::NEW_2, 0);
 
-void pre_auton(void) {
-  // Initializing Robot Configuration. DO NOT REMOVE!
-  vexcodeInit();
+lemlib::Drivetrain drivetrain(&LeftMotor, &RightMotor, 6, lemlib::Omniwheel::NEW_325, 600, 2);
 
-  // All activities that occur before the competition starts
-  // Example: clearing encoders, setting servo positions, ...
+lemlib::ControllerSettings linearController(10, // proportional gain (kP)
+                                            0, // integral gain (kI)
+                                            3, // derivative gain (kD)
+                                            3, // anti windup
+                                            1, // small error range, in inches
+                                            100, // small error range timeout, in milliseconds
+                                            3, // large error range, in inches
+                                            500, // large error range timeout, in milliseconds
+                                            20 // maximum acceleration (slew)
+);
+
+lemlib::ControllerSettings angularController(2, // proportional gain (kP)
+                                             0, // integral gain (kI)
+                                             10, // derivative gain (kD)
+                                             3, // anti windup
+                                             1, // small error range, in degrees
+                                             100, // small error range timeout, in milliseconds
+                                             3, // large error range, in degrees
+                                             500, // large error range timeout, in milliseconds
+                                             0 // maximum acceleration (slew)
+);
+
+//CHANGE ONCE WE GET ODOM PODS ON
+lemlib::OdomSensors sensors(nullptr,
+                            nullptr, // vertical tracking wheel 2, set to nullptr as we don't have a second one
+                        	nullptr, // horizontal tracking wheel
+                            nullptr, // horizontal tracking wheel 2, set to nullptr as we don't have a second one
+                            &inertial // inertial sensor
+);
+
+lemlib::ExpoDriveCurve throttleCurve(3, // joystick deadband out of 127
+                                     10, // minimum output where drivetrain will move out of 127
+                                     1.019 // expo curve gain
+);
+
+// input curve for steer input during driver control
+lemlib::ExpoDriveCurve steerCurve(3, // joystick deadband out of 127
+                                  10, // minimum output where drivetrain will move out of 127
+                                  1.019 // expo curve gain
+);
+
+lemlib::Chassis chassis(drivetrain, linearController, angularController, sensors, &throttleCurve, &steerCurve);
+
+/**
+ * A callback function for LLEMU's center button.
+ *
+ * When this callback is fired, it will toggle line 2 of the LCD text between
+ * "I was pressed!" and nothing.
+ */
+
+
+/**
+ * Runs initialization code. This occurs as soon as the program is started.
+ *
+ * All other competition modes are blocked by initialize; it is recommended
+ * to keep execution time for this mode under a few seconds.
+ */
+void initialize() {
+pros::lcd::initialize(); // initialize brain screen
+    chassis.calibrate(); // calibrate sensors
+
+    // the default rate is 50. however, if you need to change the rate, you
+    // can do the following.
+    // lemlib::bufferedStdout().setRate(...);
+    // If you use bluetooth or a wired connection, you will want to have a rate of 10ms
+
+    // for more information on how the formatting for the loggers
+    // works, refer to the fmtlib docs
+
+    // thread to for brain screen and position logging
+    pros::Task screenTask([&]() {
+        while (true) {
+            // print robot location to the brain screen
+            pros::lcd::print(0, "X: %f", chassis.getPose().x); // x
+            pros::lcd::print(1, "Y: %f", chassis.getPose().y); // y
+            pros::lcd::print(2, "Theta: %f", chassis.getPose().theta); // heading
+            // log position telemetry
+            lemlib::telemetrySink()->info("Chassis pose: {}", chassis.getPose());
+            // delay to save resources
+            pros::delay(50);
+        }
+    });
 }
 
-/*---------------------------------------------------------------------------*/
-/*                                                                           */
-/*                              Autonomous Task                              */
-/*                                                                           */
-/*  This task is used to control your robot during the autonomous phase of   */
-/*  a VEX Competition.                                                       */
-/*                                                                           */
-/*  You must modify the code to add your own robot specific commands here.   */
-/*---------------------------------------------------------------------------*/
+/**
+ * Runs while the robot is disabled
+ */
+void disabled() {}
 
+/**
+ * runs after initialize if the robot is connected to field control
+ */
+void competition_initialize() {}
 
+// get a path used for pure pursuit
+// this needs to be put outside a function
+// '.' replaced with "_" to make c++ happy
 
-float motorAverage() {
-  return (RF.position(deg) + RM.position(deg) + RB.position(deg) +
-          LF.position(deg) + LM.position(deg) + LB.position(deg)) /
-         6;
+/**
+ * Runs during auto
+ *
+ * This is an example autonomous routine which demonstrates a lot of the features LemLib has to offer
+ */
+ASSET(path_jerryio_txt);
+
+void autonomous() {
+chassis.setPose(0,0,0);
+chassis.follow(path_jerryio_txt, 15, 10000);
 }
-// relative positioning is faster and easier to code but we lose accuracy
-void motorReset() { // we need to reset the motor's rotation after every move
-                    // because of relative position
-  RF.resetPosition();
-  LF.resetPosition();
-  RM.resetPosition();
-  LM.resetPosition();
-  RB.resetPosition();
-  LB.resetPosition();
-}
-void driveStraight(float dist, int maxspeed) {
-  motorReset();
-  ////////////////////////////////////
-  // Only Change These 3 Values Below//
-  ///////////////////////////////////
-  float kp = .475
-  ;   // proportional gain
-  float ki = .0003; // integral gain
-  float kd = .4;    // derivative gain
 
-  float error = dist - motorAverage(); // error(how big is the error)
-  float p = kp * error;                // proportional speed calcuation
 
-  float sumDist = 0;      // sum of the distance traveled (total)
-  float i = ki * sumDist; // integral speed calcuation
-
-  float lastError = error; // last error, at the beginning this is = to current
-                           // error to not mess up calculations
-  float deltaError = lastError - error; // change in error overtime/update
-  float d = kd * deltaError;            // derivative speed calcuation
-
-  float speed = p + i + d;
-
-  while (fabs(error) >= 15) {
-    error = dist - motorAverage(); // error(how big is the error)
-    p = kp * error;                // proportional speed calcuation
-
-    // sumDist = 0;//sum of the distance traveled (total)
-    i = ki * sumDist; // integral speed calcuation
-
-    deltaError = error - lastError; // change in error overtime/update
-    d = kd * deltaError;
-    if (speed > maxspeed) {
-      speed = maxspeed;
-    } else {
-      speed = p + i + d;
+void runIntake() {
+	if (controller.get_digital(pros::E_CONTROLLER_DIGITAL_R1)){
+		Intake1.move(-127);
+		Intake2.move(-127);
+		Hook.move(127);
+	}
+    else if(controller.get_digital(pros::E_CONTROLLER_DIGITAL_R2)){
+        Intake1.move(127);
+        Intake2.move(127);
+        Hook.move(-127);
     }
-    // printf("speed: %f\n",speed);
-    printf("p: %f\n", p);
-    printf("i: %f\n", i);
-    printf("d: %f\n", d);
-    printf("speed: %f\n", speed);
-    printf("dist: %f\n", motorAverage());
-    LF.spin(fwd, speed * .12, volt);
-    LM.spin(fwd, speed * .12, volt);
-    LB.spin(fwd, speed * .12, volt);
-    RF.spin(fwd, speed * .12, volt);
-    RM.spin(fwd, speed * .12, volt);
-    RB.spin(fwd, speed * .12, volt);
-    wait(20, msec);
-    lastError = error; // last error, at the beginning this is = to current
-                       // error to not mess up calculations
-    sumDist += error;
-  }
-  printf("NICE");
-  LF.stop(brake);
-  LM.stop(brake);
-  LB.stop(brake);
-  RF.stop(brake);
-  RM.stop(brake);
-  RB.stop(brake);
-}
-void turning(double ang, double accuracy = 0.5) { //-100
-motorReset();
-  float kp = .39725;                                  // proportional gain
-  float ki = 0.0000015;                            // integral gain
-  float kd = 0; // derivative gain doesnt do anything in this
-
-  float error = ang - Inertial.rotation(); // error(how big is the error)
-  float p = kp * error;                    // proportional speed calcuation
-
-  float sumDist = 0;      // sum of the distance traveled (total)
-  float i = ki * sumDist; // integral speed calcuation
-
-  double lastError = error; // last error, at the beginning this is = to current
-                            // error to not mess up calculations
-  double deltaError = lastError - error; // change in error overtime/update
-  double d = kd * deltaError;            // derivative speed calcuation
-
-  float speed = p + i + d;
-  while (Inertial.rotation() < (ang - accuracy) ||
-         Inertial.rotation() >
-             (ang + accuracy)) { // This while loop checks if the current sensor
-                                 // value is inbetween the acceptable range,
-    error = ang - Inertial.rotation(); // error(how big is the error)
-    p = kp * error;                    // proportional speed calcuation
-
-    // sumDist = 0;//sum of the distance traveled (total)
-    i = ki * sumDist; // integral speed calcuation
-
-    deltaError = error - lastError; // change in error overtime/update
-    d = kd * deltaError;
-    speed = p + i + d;
-    printf("p: %f\n", p);
-    printf("i: %f\n", i);
-    printf("d: %f\n", d);
-    printf("speed: %f\n", speed);
-    printf("inertial: %f\n", Inertial.rotation());
-
-    LF.spin(fwd, speed, pct); // if it is not in the range, the robot will
-                              // attempt to correct by moving towards the range.
-    LM.spin(fwd, speed, pct);
-    LB.spin(fwd, speed, pct);
-    RF.spin(fwd, -speed, pct);
-    RB.spin(fwd, -speed, pct);
-    RM.spin(
-        fwd, -speed,
-        pct); // speed has to be reversed because thats how you turn the robot
-    lastError = error; // last error, at the beginning this is = to current
-                       // error to not mess up calculations
-    sumDist += error;
-  }
-  // printf("speed: %f\n",speed);
-  LF.stop(brake);
-  LM.stop(brake);
-  LB.stop(brake);
-  RF.stop(brake);
-  RM.stop(brake);
-  RB.stop(brake);
-}
-void noPIDDrive(double seconds, float volts, int fowards = 1) {
-  LF.spin(fwd, fowards * volts, volt);
-  LM.spin(fwd, fowards * volts, volt);
-  LB.spin(fwd, fowards * volts, volt);
-  RF.spin(fwd, fowards * volts, volt);
-  RB.spin(fwd, fowards * volts, volt);
-  RM.spin(fwd, fowards * volts, volt);
-  wait(seconds,sec);
-  LF.stop(coast);
-  LM.stop(coast);
-  LB.stop(coast);
-  RF.stop(coast);
-  RB.stop(coast);
-  RM.stop(coast);
+	else{
+		Intake.brake();
+		Hook.brake();
+		}
 }
 
-void autonomous(void) {
- driveStraight(-550,80);
- clamp.open();
- wait(0.5,seconds);
- clamp.close();
- turning(75);
- //not tested past this
- driveStraight(400,100);
- intake.spin(fwd,12,volt);
- wait(0.5,seconds);
- intake.stop();
- driveStraight(100,100);
- intake.spin(fwd,12,volt);
- wait(0.5,seconds);
- intake.stop();
- turning(-50);
- driveStraight(300,100);
- turning(30);
- driveStraight(200, 100);
+void Clamping(){
+    if (controller.get_digital(pros::E_CONTROLLER_DIGITAL_L1)){
+        Clamp.extend();
+    }
+    else if(controller.get_digital(pros::E_CONTROLLER_DIGITAL_L2)){
+        Clamp.retract();
+    }
 }
-
-/*---------------------------------------------------------------------------*/
-/*                                                                           */
-/*                              User Control Task                            */
-/*                                                                           */
-/*  This task is used to control your robot during the user control phase of */
-/*  a VEX Competition.                                                       */
-/*                                                                           */
-/*  You must modify the code to add your own robot specific commands here.   */
-/*---------------------------------------------------------------------------*/
-
-// void Drive(){
-//   LB.spin(fwd,(Cntl.Axis3.position(pct)-Cntl.Axis1.position(pct)),pct);
-//   LM.spin(fwd,(Cntl.Axis3.position(pct)-Cntl.Axis1.position(pct)),pct);
-//   LF.spin(fwd,(Cntl.Axis3.position(pct)-Cntl.Axis1.position(pct)),pct);
+/**
+ * Runs in driver control
+ */
+void opcontrol() {
+    // controller
+    // loop to continuously update motors
 
 
-//   RB.spin(fwd,(Cntl.Axis3.position(pct)+Cntl.Axis1.position(pct)),pct);
-//   RM.spin(fwd,(Cntl.Axis3.position(pct)+Cntl.Axis1.position(pct)),pct);
-//   RF.spin(fwd,(Cntl.Axis3.position(pct)+Cntl.Axis1.position(pct)),pct);
-// }
-double s_Speed = 0.0;
-double s_Turn = 0.0;
-
-void arcadeDrive(double speed, double turn) {
-  speed /= 100.0;
-  turn /= 100.0;
-
-  speed *= fabs(speed);
-  turn *= fabs(turn);
-
-  double turnAdj = fmax(0.6, fabs(speed));
-
-  turn *= turnAdj;
-
-  speed *= 13.0;
-  turn *= 13.0;
-
-  s_Speed += (speed - s_Speed) * 0.5;
-  s_Turn += (turn - s_Turn) * 0.75;
-
-  const double left = s_Speed + s_Turn;
-  const double right = s_Speed - s_Turn;
-
-  RF.spin(fwd, right, volt);
-  RM.spin(fwd, right, volt);
-  RB.spin(fwd, right, volt);
-
-  LF.spin(fwd, left, volt);
-  LM.spin(fwd, left, volt);
-  LB.spin(fwd, left, volt);
-}
-
-void Drive(){
-  double speed = Cntrl.Axis3.position(pct);
-  double turn = Cntrl.Axis1.position(pct);
-
-  arcadeDrive(speed, turn);
-}
-
-void Intake(){
-  if(Cntrl.ButtonR1.pressing()){
-    intake.spin(fwd,12,volt);
-  }
-  else if (Cntrl.ButtonR2.pressing()){
-    intake.spin(fwd,-12,volt);
-  }
-  else{
-    intake.stop(coast);
-  }
-}
-
-void Clamp(){
-  if(Cntrl.ButtonL1.pressing()){
-    clamp.open();
-  }
-  else if(Cntrl.ButtonL2.pressing()){
-    clamp.close();
-  }
-}
-void usercontrol(void) {
-  // User control code here, inside the loop
-  while (1) {
-    // This is the main execution loop for the user control program.
-    // Each time through the loop your program should update motor + servo
-    // values based on feedback from the joysticks.
-
-    Drive();
-    Intake();
-    Clamp();
-    wait(20, msec); // Sleep the task for a short amount of time to
-                    // prevent wasted resources.
-  }
-}
-
-
-//
-// Main will set up the competition functions and callbacks.
-//
-int main() {
-  // Set up callbacks for autonomous and driver control periods.
-  Competition.autonomous(autonomous);
-  Competition.drivercontrol(usercontrol);
-
-  // Run the pre-autonomous function.
-  pre_auton();
-
-  // Prevent main from exiting with an infinite loop.
-  while (true) {
-    wait(100, msec);
-  }
+    while (true) {
+        // get joystick positions`
+        int leftY = controller.get_analog(pros::E_CONTROLLER_ANALOG_LEFT_Y);
+        int rightX = controller.get_analog(pros::E_CONTROLLER_ANALOG_RIGHT_X);
+        // move the chassis with curvature drive
+        chassis.arcade(-rightX, -leftY,false);  
+        runIntake();
+        Clamping();
+        // delay to save resources
+        pros::delay(10);
+    }
 }
